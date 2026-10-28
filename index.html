@@ -1182,7 +1182,7 @@ const screens = {
   },
   backup(){
     return {
-      head:`<h1>Backup</h1><span class="sp"></span><span class="pill">versão 15 · offline</span>`,
+      head:`<h1>Backup</h1><span class="sp"></span><span class="pill">versão 16 · offline</span>`,
       body:`${syncSection()}
         <div class="label">Backup manual</div>
         <p class="help">Copie o backup e guarde numa nota ou mande pra você mesmo. “Importar” junta as músicas do backup com as que já estão aqui, sem apagar nada.</p>
@@ -1660,11 +1660,40 @@ render();
 queueSync(500);
 </script>
 
+<div id="upd" hidden><span>Nova versão do app disponível</span><button id="upd-go">Atualizar</button></div>
+<style>#upd{position:fixed;left:50%;transform:translateX(-50%);top:calc(10px + env(safe-area-inset-top,0px));z-index:40;display:flex;gap:12px;align-items:center;background:var(--accent);color:var(--accent-ink);padding:8px 8px 8px 14px;border-radius:12px;font-weight:700;font-size:14px;box-shadow:0 6px 20px rgba(0,0,0,.3);max-width:calc(100% - 32px)}#upd[hidden]{display:none}#upd button{border:0;border-radius:8px;background:var(--accent-ink);color:var(--accent);font-weight:700;padding:8px 12px;min-height:36px}</style>
 <script>
-/* Funciona sem internet: o service worker guarda o app no aparelho na primeira visita */
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
-}
+/* Funciona sem internet: o service worker guarda o app no aparelho na primeira visita.
+   Atualização: ao abrir e sempre que o app volta para a tela, procura versão nova no GitHub e aplica. */
+const APP_VERSION = '16';
+(function(){
+  if (!('serviceWorker' in navigator)) return;
+  let reloading = false, lastCheck = 0;
+  const editing = () => { try { const t = curScreen().type; return t === 'edit' || tempo.on; } catch(e) { return false; } };
+  const reloadNow = () => { if (reloading) return; reloading = true; location.reload(); };
+  const showBanner = () => { const b = document.getElementById('upd'); if (b) b.hidden = false; };
+  document.getElementById('upd-go').addEventListener('click', reloadNow);
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!editing()) reloadNow(); else showBanner(); });
+  async function check(){
+    if (!navigator.onLine || Date.now() - lastCheck < 3000) return;
+    lastCheck = Date.now();
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) reg.update().catch(() => {});
+      const txt = await fetch('index.html?v=' + Date.now(), { cache: 'no-store' }).then(r => r.ok ? r.text() : '');
+      const m = /const APP_VERSION = '(\d+)'/.exec(txt);
+      if (m && +m[1] > +APP_VERSION){
+        const c = await caches.open('cifra-palco-v' + m[1]); await c.put('./', new Response(txt, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })); await c.put('./index.html', new Response(txt, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+        if (!editing()) reloadNow(); else showBanner();
+      }
+    } catch(e) {}
+  }
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {}); setTimeout(check, 1500); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  window.addEventListener('pageshow', e => { if (e.persisted) check(); });
+  window.addEventListener('online', check);
+  setInterval(() => { if (document.visibilityState === 'visible') check(); }, 5 * 60000);
+})();
 </script>
 </body>
 </html>
