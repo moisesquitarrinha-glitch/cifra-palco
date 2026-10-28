@@ -204,6 +204,10 @@ details.adj .tools{padding:0 10px 10px}
 
 .sheet-inst{align-self:stretch}
 .sheet-inst button{flex:1;padding:0 6px;font-size:13px}
+.sync-st{margin:0;font-size:13px;color:var(--muted)}
+.sync-dot{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:40%;padding-left:6px}
+[data-sync-status][data-state="err"]{color:var(--danger)}
+[data-sync-status][data-state="ok"]::before{content:"● ";color:#4caf7a}
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom, 0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:700;font-size:14px;z-index:20;max-width:calc(100% - 32px)}
 @media (max-width:420px){ .btn{padding:0 12px} }
 @media (prefers-reduced-motion: reduce){ *{scroll-behavior:auto!important} }
@@ -299,10 +303,27 @@ function fixKeys(){
     if (s.singerKey){ const ns = normKey(s.singerKey); if (ns !== s.singerKey){ s.singerKey = ns; changed = true; } }
     if (!keyRoot(s.key)){ const d = detectKey(s.body); if (d){ s.key = d; s.keyGuess = true; s.shift = s.singerKey ? keyInterval(d, s.singerKey) : (s.shift || 0); changed = true; } }
   });
-  if (changed) save();
+  if (changed) save({ stamp:false });
 }
 const PARTS = ['INTRO','VERSO','PRÉ-REFRÃO','REFRÃO','PÓS-REFRÃO','PONTE','SOLO','INTERLÚDIO','FINAL'];
-function save(){ try { localStorage.setItem(KEY, JSON.stringify(data)); } catch(e){} }
+/* Cada música e setlist ganha a hora da última alteração; o que some vira "excluído" (para a sincronização) */
+let snap = new Map();
+const itemKey = x => { const { updatedAt, ...rest } = x; return JSON.stringify(rest); };
+function takeSnap(){ snap = new Map([...data.songs, ...data.setlists].map(x => [x.id, itemKey(x)])); }
+function save(opts = {}){
+  if (opts.stamp !== false){
+    const now = Date.now(), seen = new Set();
+    data.deleted = data.deleted || {};
+    for (const x of [...data.songs, ...data.setlists]){
+      seen.add(x.id);
+      if (snap.get(x.id) !== itemKey(x)) x.updatedAt = now;
+    }
+    for (const id of snap.keys()) if (!seen.has(id)) data.deleted[id] = now;
+  }
+  takeSnap();
+  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch(e){}
+  if (opts.stamp !== false && typeof queueSync === 'function') queueSync();
+}
 const getSong = id => data.songs.find(s => s.id === id);
 const getSet = id => data.setlists.find(s => s.id === id);
 
@@ -1022,7 +1043,7 @@ const screens = {
   songs(){
     const hasEx = data.songs.some(s => s.ex) || data.setlists.some(s => s.ex);
     return {
-      head:`<h1>Músicas</h1><span class="sp"></span>
+      head:`<h1>Músicas</h1>${syncOn() ? `<span class="sync-dot" data-sync-status data-state="${sync.state}" title="Sincronização">${esc(syncLabel())}</span>` : ''}<span class="sp"></span>
         <button class="icon-btn" data-act="find" aria-label="Procurar música"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button>
         <button class="btn primary" data-act="new-song">+ Nova</button>`,
       body:`${hasEx ? `<div class="note"><p>As músicas e o setlist que estão aqui são exemplos para você ver como funciona. As suas ficam salvas neste aparelho.</p>
@@ -1161,17 +1182,35 @@ const screens = {
   },
   backup(){
     return {
-      head:`<h1>Backup</h1><span class="sp"></span><span class="pill">versão 14 · offline</span>`,
-      body:`<p class="help">Suas músicas ficam salvas só neste navegador. Copie o backup e guarde numa nota ou mande pra você mesmo. Para passar pra outro aparelho, cole o texto lá em “Importar”.</p>
+      head:`<h1>Backup</h1><span class="sp"></span><span class="pill">versão 15 · offline</span>`,
+      body:`${syncSection()}
+        <div class="label">Backup manual</div>
+        <p class="help">Copie o backup e guarde numa nota ou mande pra você mesmo. “Importar” junta as músicas do backup com as que já estão aqui, sem apagar nada.</p>
         <button class="btn primary wide" data-act="copy">Copiar backup (${data.songs.length} músicas, ${data.setlists.length} setlists)</button>
         <textarea id="b-out" rows="5" readonly hidden></textarea>
         <div class="label">Importar</div>
         <textarea id="b-in" rows="6" placeholder="Cole aqui o texto do backup" spellcheck="false">${esc(ui.importText)}</textarea>
-        <button class="btn ${ui.armed === 'import' ? 'armed' : 'ghost'} wide" data-act="import">${ui.armed === 'import' ? 'Toque de novo: substitui tudo que está aqui' : 'Importar backup'}</button>`
+        <button class="btn ${ui.armed === 'import' ? 'armed' : 'ghost'} wide" data-act="import">${ui.armed === 'import' ? 'Toque de novo para juntar com o que está aqui' : 'Importar backup'}</button>`
     };
   }
 };
 
+function syncSection(){
+  if (!CAN_SYNC) return `<div class="label">Sincronizar entre aparelhos</div>
+    <p class="help">A sincronização funciona no app instalado, não neste link. Abra <b>moisesquitarrinha-glitch.github.io/cifra-palco</b> no PC e no iPhone.</p>`;
+  if (syncOn()) return `<div class="label">Sincronizar entre aparelhos</div>
+    <div class="note" style="color:var(--fg)">
+      <p>Conectado a <b>${esc(syncCfg.repo)}</b>. As músicas que você salva aqui aparecem nos outros aparelhos conectados ao mesmo repositório.</p>
+      <p class="sync-st" data-sync-status data-state="${sync.state}">${esc(syncLabel())}</p>
+      <div class="tools"><button class="btn primary" data-act="sync-now">Sincronizar agora</button>
+      <button class="btn ${ui.armed === 'sync-off' ? 'armed' : 'ghost'}" data-act="sync-off">${ui.armed === 'sync-off' ? 'Toque de novo para desconectar' : 'Desconectar'}</button></div>
+    </div>`;
+  return `<div class="label">Sincronizar entre aparelhos</div>
+    <p class="help">Conecte este aparelho ao seu repositório <b>privado</b> do GitHub. Use o mesmo repositório e a mesma chave no PC e no iPhone. A chave fica guardada só neste aparelho.</p>
+    <label class="f">Repositório<input id="sy-repo" type="text" value="${esc(syncCfg.repo || 'moisesquitarrinha-glitch/cifra-palco-dados')}" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+    <label class="f">Chave de acesso<input id="sy-token" type="password" autocomplete="off" placeholder="github_pat_…" spellcheck="false"></label>
+    <button class="btn primary wide" data-act="sync-connect">Conectar e sincronizar</button>`;
+}
 function fmtDate(d){ const [y, m, dd] = d.split('-'); return dd && m ? `${dd}/${m}/${y}` : d; }
 
 /* ---------- Render ---------- */
@@ -1430,6 +1469,28 @@ const actions = {
     ta.value = toAbove(r.body);
     toast('Partes detectadas · confira os nomes');
   },
+  async 'sync-connect'(){
+    const repo = $('#sy-repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$|\/$/g, ''), token = $('#sy-token').value.trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)){ toast('Escreva o repositório como usuário/nome'); return; }
+    if (!token){ toast('Cole a chave de acesso'); return; }
+    if (!navigator.onLine){ toast('Conecte à internet para configurar'); return; }
+    const old = { ...syncCfg }; syncCfg = { repo, token };
+    try {
+      const r = await gh('');
+      if (r.status === 401){ syncCfg = old; toast('Chave de acesso inválida'); return; }
+      if (r.status === 404){ syncCfg = old; toast('Repositório não encontrado (confira o nome e se a chave tem acesso a ele)'); return; }
+      const j = await r.json();
+      if (!j.private){ syncCfg = old; toast('Esse repositório é público. Use um privado para suas músicas.'); return; }
+      if (j.permissions && !j.permissions.push){ syncCfg = old; toast('A chave não tem permissão para gravar nesse repositório'); return; }
+    } catch(e){ syncCfg = old; toast('Não deu para falar com o GitHub agora'); return; }
+    saveSyncCfg(); render({ keep:true }); await syncNow();
+    toast(sync.state === 'ok' ? 'Conectado e sincronizado' : sync.msg);
+  },
+  'sync-now'(){ syncNow(); },
+  'sync-off'(){
+    if (ui.armed !== 'sync-off'){ arm('sync-off'); render({ keep:true }); return; }
+    syncCfg = {}; saveSyncCfg(); ui.armed = ''; setSync('', ''); toast('Desconectado. As músicas continuam neste aparelho.'); render();
+  },
   copy(){
     const txt = JSON.stringify(data);
     const fallback = () => { const o = $('#b-out'); o.hidden = false; o.value = txt; o.focus(); o.select(); toast('Selecione e copie o texto abaixo'); };
@@ -1440,7 +1501,11 @@ const actions = {
     let d; try { d = JSON.parse(txt); } catch(e){ toast('Esse texto não é um backup válido'); return; }
     if (!d || !Array.isArray(d.songs) || !Array.isArray(d.setlists)){ toast('Esse texto não é um backup válido'); return; }
     if (ui.armed !== 'import'){ ui.importText = txt; arm('import'); render({keep:true}); return; }
-    d.prefs = { ...data.prefs, ...(d.prefs || {}), notation: 'degrees' }; data = d; fixKeys(); save(); ui.armed = ''; ui.importText = ''; toast(`Importado: ${d.songs.length} músicas`); render();
+    const before = data.songs.length;
+    const merged = mergeData(data, { songs:d.songs, setlists:d.setlists, deleted:{} });
+    data.songs = merged.songs; data.setlists = merged.setlists;
+    fixKeys(); save(); ui.armed = ''; ui.importText = '';
+    toast(`Importado: ${d.songs.length} músicas (${data.songs.length - before} novas)`); render();
   }
 };
 
@@ -1508,8 +1573,91 @@ document.addEventListener('keydown', e => {
   }
 });
 
+/* ---------- Sincronização entre aparelhos (GitHub, repositório privado) ---------- */
+const SYNC_KEY = 'cifra-palco-sync';
+const CAN_SYNC = !/claudeusercontent\.com$/.test(location.hostname) && location.protocol.startsWith('http');
+let syncCfg = {}; try { syncCfg = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}') || {}; } catch(e){}
+const saveSyncCfg = () => { try { localStorage.setItem(SYNC_KEY, JSON.stringify(syncCfg)); } catch(e){} };
+const sync = { busy:false, again:false, timer:0, state:'', msg:'' };
+const syncOn = () => CAN_SYNC && syncCfg.repo && syncCfg.token;
+const b64enc = str => { const b = new TextEncoder().encode(str); let out = ''; for (let i = 0; i < b.length; i += 0x8000) out += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(out); };
+const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
+async function gh(path, init = {}){
+  const res = await fetch('https://api.github.com/repos/' + syncCfg.repo + path, { cache:'no-store', ...init,
+    headers: { 'Accept':'application/vnd.github+json', 'Authorization':'Bearer ' + syncCfg.token, 'X-GitHub-Api-Version':'2022-11-28', ...(init.body ? { 'Content-Type':'application/json' } : {}) } });
+  return res;
+}
+function mergeData(a, b){
+  const del = { ...(a.deleted || {}) };
+  for (const [k, t] of Object.entries(b.deleted || {})) del[k] = Math.max(del[k] || 0, t);
+  const pick = (xs = [], ys = []) => {
+    const m = new Map();
+    for (const x of [...xs, ...ys]){ const c = m.get(x.id); if (!c || (x.updatedAt || 0) > (c.updatedAt || 0)) m.set(x.id, x); }
+    return [...m.values()].filter(x => !(del[x.id] && del[x.id] >= (x.updatedAt || 0)));
+  };
+  return { songs: pick(a.songs, b.songs), setlists: pick(a.setlists, b.setlists), deleted: del };
+}
+const canon = d => JSON.stringify({ songs:[...(d.songs || [])].sort((x, y) => x.id < y.id ? -1 : 1), setlists:[...(d.setlists || [])].sort((x, y) => x.id < y.id ? -1 : 1), deleted:Object.fromEntries(Object.entries(d.deleted || {}).sort()) });
+function setSync(state, msg){
+  sync.state = state; sync.msg = msg;
+  document.querySelectorAll('[data-sync-status]').forEach(el => { el.textContent = msg; el.dataset.state = state; });
+}
+function syncLabel(){
+  if (!syncOn()) return '';
+  if (sync.msg) return sync.msg;
+  return syncCfg.last ? 'Sincronizado às ' + new Date(syncCfg.last).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) : 'Aguardando sincronizar';
+}
+function queueSync(delay = 2000){ if (!syncOn()) return; clearTimeout(sync.timer); sync.timer = setTimeout(syncNow, delay); }
+async function syncNow(){
+  if (!syncOn()) return;
+  if (!navigator.onLine){ setSync('off', 'Sem internet · envia quando conectar'); return; }
+  if (sync.busy){ sync.again = true; return; }
+  sync.busy = true; setSync('busy', 'Sincronizando…');
+  try {
+    for (let attempt = 0; attempt < 3; attempt++){
+      const r = await gh('/contents/dados.json');
+      let remote = {}, sha = null;
+      if (r.status === 200){ const j = await r.json(); sha = j.sha; try { remote = JSON.parse(b64dec(j.content || '')); } catch(e){ remote = {}; } }
+      else if (r.status !== 404) throw { status: r.status };
+      const merged = mergeData(data, remote);
+      const before = canon(data);
+      if (canon(merged) !== before){
+        data.songs = merged.songs; data.setlists = merged.setlists; data.deleted = merged.deleted;
+        save({ stamp:false });
+        const scr = curScreen();
+        if (scr && scr.type !== 'edit' && !tempo.on) render({ keep:true });
+      }
+      if (canon(remote) === canon(merged)) break;
+      const body = JSON.stringify({ message: 'Sincroniza músicas', content: b64enc(JSON.stringify({ app:'cifra-palco', songs:merged.songs, setlists:merged.setlists, deleted:merged.deleted }, null, 1)), ...(sha ? { sha } : {}) });
+      const w = await gh('/contents/dados.json', { method:'PUT', body });
+      if (w.status === 200 || w.status === 201) break;
+      if (w.status === 409 || w.status === 422) continue; // outro aparelho salvou junto: busca de novo e junta
+      throw { status: w.status };
+    }
+    syncCfg.last = Date.now(); saveSyncCfg(); sync.msg = ''; setSync('ok', syncLabel());
+  } catch(e){
+    const st = e && e.status;
+    const msg = st === 401 ? 'A chave de acesso não vale mais. Crie outra e conecte de novo.'
+      : st === 403 ? 'A chave não tem permissão para gravar nesse repositório.'
+      : st === 404 ? 'Repositório não encontrado. Confira o nome e a chave.'
+      : !navigator.onLine ? 'Sem internet · envia quando conectar'
+      : 'Não deu para sincronizar agora. Tento de novo em instantes.';
+    setSync('err', msg);
+  } finally {
+    sync.busy = false;
+    if (sync.again){ sync.again = false; queueSync(300); }
+  }
+}
+window.addEventListener('online', () => queueSync(300));
+window.addEventListener('offline', () => syncOn() && setSync('off', 'Sem internet · envia quando conectar'));
+let lastVis = 0;
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - lastVis > 15000){ lastVis = Date.now(); queueSync(200); } });
+setInterval(() => { if (document.visibilityState === 'visible') queueSync(0); }, 60000);
+
+takeSnap();
 fixKeys();
 render();
+queueSync(500);
 </script>
 
 <script>
