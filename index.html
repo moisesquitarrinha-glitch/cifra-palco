@@ -208,6 +208,9 @@ details.adj .tools{padding:0 10px 10px}
 .sync-dot{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:40%;padding-left:6px}
 [data-sync-status][data-state="err"]{color:var(--danger)}
 [data-sync-status][data-state="ok"]::before{content:"● ";color:#4caf7a}
+.steps{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:10px;font-size:15px;line-height:1.45}
+.steps li{padding-left:2px}
+a.bm{display:inline-block;margin-top:8px;padding:10px 14px;border-radius:10px;background:var(--accent);color:var(--accent-ink);font-weight:700;text-decoration:none;cursor:grab}
 #toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom, 0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:700;font-size:14px;z-index:20;max-width:calc(100% - 32px)}
 @media (max-width:420px){ .btn{padding:0 12px} }
 @media (prefers-reduced-motion: reduce){ *{scroll-behavior:auto!important} }
@@ -233,6 +236,22 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => Math.random().toString(36).slice(2, 10);
 const KEY = 'cifra-palco-v1';
+const APP_URL = 'https://moisesquitarrinha-glitch.github.io/cifra-palco/';
+/* Roda na página do site de cifras (no navegador da pessoa): pega título, artista, tom, capotraste e a cifra que está na tela */
+const EXTRACT_SRC = "function(){var d=document,T=function(e){return e?String(e.innerText||e.textContent||'').trim():''};"
+ + "var s=String(window.getSelection?getSelection():'').trim();"
+ + "var ps=[].slice.call(d.querySelectorAll('pre')),pre=ps.filter(function(p){return p.querySelector('b')})[0]||ps[0];"
+ + "var x=s.length>40?s:(pre?(pre.innerText||pre.textContent||''):'');"
+ + "var p=d.title.split(' - '),b=(d.body&&d.body.innerText)||'';"
+ + "var tt=T(d.querySelector('h1.t1'))||T(d.querySelector('h1'));if(!tt||/cifra ?club/i.test(tt))tt=p[0]||'';"
+ + "var ar=T(d.querySelector('h2.t3 a'))||T(d.querySelector('h2.t3'))||(p.length>2?p[1]:'');"
+ + "var km=/([A-G][#b]?m?)\\s*$/.exec(T(d.querySelector('#cifra_tom')))||/\\bTom:?\\s*\\n?\\s*([A-G][#b]?m?)(?![\\w#])/.exec(b);"
+ + "var cm=/Capotraste\\s*(?:na)?\\s*(\\d+)/i.exec(T(d.querySelector('#cifra_capo'))||b);"
+ + "return {title:tt,artist:ar,key:km?km[1]:'',capo:cm?cm[1]:'',url:location.href,text:x}}";
+const PAYLOAD_SRC = "function(o){return 'CIFRA DE PALCO\\nTítulo: '+o.title+'\\nArtista: '+o.artist+'\\nTom: '+o.key+'\\nCapotraste: '+o.capo+'\\nFonte: '+o.url+'\\n\\n'+o.text}";
+const BOOKMARKLET = 'javascript:' + encodeURIComponent("(function(){var o=(" + EXTRACT_SRC + ")();if(!o.text||o.text.length<10){alert('Não achei a cifra nesta página. Abra a página da música (ou selecione a cifra) e tente de novo.');return}"
+ + "var u='" + APP_URL + "#importar='+encodeURIComponent(JSON.stringify(o));var w=window.open(u,'_blank');if(!w)location.href=u})()");
+const SHORTCUT_JS = "var o=(" + EXTRACT_SRC + ")();\ncompletion(o.text&&o.text.length>=10?(" + PAYLOAD_SRC + ")(o):'');";
 
 /* ---------- Dados de exemplo ---------- */
 const SEED = {
@@ -831,6 +850,43 @@ function looksLikeAbove(text){
   if (/\[[A-G][#b]?[^\]\s]*\][^\n]*[a-zà-ú]/i.test(text) && !text.split('\n').some(isChordLine)) return false;
   return text.split('\n').filter(isChordLine).length >= 2;
 }
+/* Lê o texto que o botão/Atalho manda: cabeçalho com título, artista, tom, capo e fonte, depois a cifra */
+function parsePayload(txt){
+  txt = cleanText(txt);
+  const o = { text: txt };
+  const m = /^\s*CIFRA DE PALCO\s*\n([\s\S]*?)\n\s*\n([\s\S]*)$/.exec(txt);
+  if (m){
+    o.text = m[2];
+    m[1].split('\n').forEach(l => {
+      const k = /^(Título|Artista|Tom|Capotraste|Fonte):\s*(.*)$/i.exec(l.trim()); if (!k) return;
+      const v = k[2].trim(), f = k[1].toLowerCase();
+      if (f === 'título') o.title = v; else if (f === 'artista') o.artist = v; else if (f === 'tom') o.key = v;
+      else if (f === 'capotraste') o.capo = parseInt(v) || ''; else o.url = v;
+    });
+  }
+  return o;
+}
+const isPayload = t => /^\s*CIFRA DE PALCO\s*\n/.test(cleanText(t || ''));
+/* Abre o editor com a música que veio do site, já convertida */
+function openImport(o){
+  const r = convertPasted(o.text || '');
+  if (!r.body.trim()){ toast('Não achei acordes nessa cifra'); return; }
+  const key = normKey(o.key) || normKey(r.key) || detectKey(r.body);
+  const title = (o.title || '').trim(), artist = (o.artist || '').trim();
+  const dup = title && data.songs.find(s => s.title.toLowerCase() === title.toLowerCase() && (s.artist || '').toLowerCase() === artist.toLowerCase());
+  tab = 'songs';
+  nav = [{ type:'songs' }, { type:'edit', id:null, draft:{ title, artist, key, bpm:'', capo:+o.capo || r.capo || '', body:r.body, source:o.url || '' } }];
+  ui.armed = ''; render();
+  toast(dup ? `Você já tem “${title}”. Salvar cria outra cópia.` : `Chegou do site · tom ${key || '?'} · confira e salve`);
+}
+function importFromHash(){
+  if (!location.hash.startsWith('#importar=')) return;
+  let o = null;
+  try { o = JSON.parse(decodeURIComponent(location.hash.slice(10))); } catch(e){ toast('Não consegui ler a cifra enviada'); }
+  try { history.replaceState(null, '', location.pathname + location.search); } catch(e){}
+  if (o && typeof o === 'object') openImport(o);
+}
+
 /* Remove caracteres invisíveis que sites de cifra inserem (U+200B etc.) e troca espaço não separável por espaço */
 const cleanText = t => (t || '').replace(/[​-‍⁠﻿­]/g, '').replace(/[   ]/g, ' ').replace(/\r\n?/g, '\n');
 function convertPasted(text, opts = {}){
@@ -842,7 +898,8 @@ function convertPasted(text, opts = {}){
     if (!tl){ if (out.length && out[out.length - 1] !== '') out.push(''); continue; }
     if ((m = /^tom:?\s*([A-G][#b]?m?)\b/i.exec(tl))){ key = key || m[1][0].toUpperCase() + m[1].slice(1); continue; }
     if (/^tom:?$/i.test(tl) && lines[i + 1] && /^\s*[A-G][#b]?m?\s*$/.test(lines[i + 1])){ key = key || normKey(lines[i + 1]); i++; continue; }
-    if ((m = /^capotraste\s*(?:na)?\s*(\d+)/i.exec(tl))){ capo = +m[1]; continue; }
+    if ((m = /^capotraste:?\s*(?:na)?\s*(\d+)/i.exec(tl))){ capo = +m[1]; continue; }
+    if (/^CIFRA DE PALCO$|^(Título|Artista|Fonte|Capotraste):/i.test(tl)) continue;
     if ((m = /^\[([^\]]+)\]\s*(.*)$/.exec(tl)) && !isTok(m[1])){
       if (out.length && out[out.length - 1] !== '') out.push('');
       out.push('# ' + m[1].trim().toUpperCase());
@@ -1030,6 +1087,7 @@ function songBody(s){
       ${s.bpm ? `<span><b>${esc(s.bpm)}</b> bpm</span>` : ''}
       <span>Compasso <b>${bpb === 6 ? '6/8' : bpb + '/4'}</b></span>
     </div>
+    ${s.source ? `<a class="ext" href="${esc(s.source)}" target="_blank" rel="noopener">Ver a cifra original no site ↗</a>` : ''}
     ${s.keyGuess ? `<p class="src">Tom descoberto pelos acordes: <b>${esc(s.key)}</b>. Se não for esse, corrija em “Editar” e os graus se ajustam.</p>` : ''}
     ${s.src === 'claude' ? '<p class="src">Harmonia sugerida pelo Claude a partir do que ele conhece da música. Confira com a gravação e ajuste em “Editar”.</p>' : ''}
     ${noKey ? '<p class="src">Para ver os graus, informe o tom da música em “Editar”.</p>' : ''}
@@ -1048,6 +1106,7 @@ const screens = {
         <button class="btn primary" data-act="new-song">+ Nova</button>`,
       body:`${hasEx ? `<div class="note"><p>As músicas e o setlist que estão aqui são exemplos para você ver como funciona. As suas ficam salvas neste aparelho.</p>
           <button class="btn ${ui.armed === 'seed' ? 'armed' : 'ghost'}" data-act="clear-seed">${ui.armed === 'seed' ? 'Toque de novo para apagar' : 'Apagar exemplos'}</button></div>` : ''}
+        <div class="tools"><button class="btn ghost" style="flex:1" data-act="clip-import">Colar do Cifra Club</button><button class="btn ghost" data-act="helper">Como usar</button></div>
         <input id="q" type="search" placeholder="Buscar por título, artista ou cantora" value="${esc(ui.q)}" autocomplete="off" aria-label="Buscar música">
         <ul class="list" id="list">${songItems()}</ul>`
     };
@@ -1174,15 +1233,43 @@ const screens = {
           <button class="btn primary" type="submit" ${f.status === 'loading' ? 'disabled' : ''}>Buscar</button>
         </form>${out}
         <div class="label" style="margin-top:8px">Colar de um site de cifras</div>
+        <button class="btn ghost wide" data-act="helper">Botão do Cifra Club no PC e no iPhone ›</button>
         <p class="help">Abra a cifra no site, copie (letra e acordes) e cole abaixo. O app converte os acordes que ficam em cima da letra, as partes ([Intro], [Refrão]…) e o tom.</p>
         <a class="ext" href="https://www.google.com/search?q=${encodeURIComponent((f.q || 'cifra') + ' cifra club')}" target="_blank" rel="noopener">${f.q ? `Procurar “${esc(f.q)}” no Cifra Club ↗` : 'Abrir busca de cifras ↗'}</a>
         <textarea id="paste" rows="8" spellcheck="false" autocapitalize="off" placeholder="Cole a cifra aqui"></textarea>
         <button class="btn primary wide" data-act="paste-convert">Converter e revisar</button>`
     };
   },
+  helper(){
+    return {
+      head:`<button class="icon-btn" data-act="back" aria-label="Voltar">‹</button><div class="htitle"><b>Botão do Cifra Club</b></div>`,
+      body:`<p class="help">Abra a cifra no Cifra Club e toque no botão: a música chega aqui com título, artista, tom e capotraste, já em graus e com as partes separadas. Depois é só conferir e salvar. Funciona também em outros sites de cifra: se o botão não achar a cifra sozinho, selecione o texto da cifra antes de tocar.</p>
+        <div class="label">No PC (Chrome ou Edge)</div>
+        <ol class="steps">
+          <li>Mostre a barra de favoritos: <b>Ctrl + Shift + B</b>.</li>
+          <li>Arraste este botão até a barra de favoritos:<br><a class="bm" href="${esc(BOOKMARKLET)}" data-act="bm-hint" draggable="true">♪ Mandar para o Cifra de Palco</a></li>
+          <li>Abra uma cifra no Cifra Club e clique no favorito. O app abre numa aba nova com a música pronta para salvar.</li>
+        </ol>
+        <p class="help">Se arrastar não funcionar: copie o código, crie um favorito novo na barra e cole no campo do endereço (URL).</p>
+        <button class="btn ghost wide" data-act="copy-code" data-v="bm">Copiar código do favorito</button>
+        <div class="label">No iPhone (app Atalhos)</div>
+        <ol class="steps">
+          <li>Toque em <b>Copiar código do Atalho</b> aqui embaixo.</li>
+          <li>Abra o app <b>Atalhos</b>, toque em <b>+</b> e dê o nome <b>Cifra de Palco</b>.</li>
+          <li>Toque em <b>ⓘ</b> (ou na seta do nome), ative <b>Mostrar na Planilha de Compartilhamento</b> e deixe só <b>Páginas Web do Safari</b>.</li>
+          <li>Adicione a ação <b>Executar JavaScript na Página Web</b>, apague o texto que vem nela e cole o código.</li>
+          <li>Adicione a ação <b>Copiar para Área de Transferência</b>.</li>
+          <li>Adicione <b>Mostrar Notificação</b> com o texto: <i>Cifra copiada. Abra o Cifra de Palco e toque em Colar do Cifra Club.</i></li>
+          <li>Em <b>Ajustes → Apps → Atalhos → Avançado</b>, ative <b>Permitir Execução de Scripts</b>.</li>
+        </ol>
+        <button class="btn primary wide" data-act="copy-code" data-v="sc">Copiar código do Atalho</button>
+        <textarea id="code-out" rows="4" readonly hidden></textarea>
+        <p class="help"><b>Para usar no iPhone:</b> no Safari, abra a cifra no Cifra Club → Compartilhar → <b>Cifra de Palco</b>. Depois abra este app e toque em <b>Colar do Cifra Club</b>, na lista de músicas. Se o iPhone perguntar, toque em <b>Colar</b>.</p>`
+    };
+  },
   backup(){
     return {
-      head:`<h1>Backup</h1><span class="sp"></span><span class="pill">versão 16 · offline</span>`,
+      head:`<h1>Backup</h1><span class="sp"></span><span class="pill">versão 17 · offline</span>`,
       body:`${syncSection()}
         <div class="label">Backup manual</div>
         <p class="help">Copie o backup e guarde numa nota ou mande pra você mesmo. “Importar” junta as músicas do backup com as que já estão aqui, sem apagar nada.</p>
@@ -1358,7 +1445,7 @@ const actions = {
     if (st.mode === 'degree' && !keyRoot(keyNow) && st.id) keyNow = getSong(st.id)?.key || '';
     if (st.mode === 'degree' && !keyRoot(keyNow)){ toast('Informe o tom original para converter os graus'); $('#f-key').focus(); return; }
     const conv = readEditor($('#f-body').value, st.mode, keyNow);
-    const fields = { title, artist: v('#f-artist'), singer: v('#f-singer'), singerKey: normKey(v('#f-skey')), key: keyNow || conv.key || (st.mode === 'degree' ? '' : detectKey(conv.body)), bpm: parseInt(v('#f-bpm')) || '', capo: parseInt(v('#f-capo')) || conv.capo || 0, bpb: +$('#f-bpb').value || 4, body: conv.body };
+    const fields = { title, artist: v('#f-artist'), singer: v('#f-singer'), singerKey: normKey(v('#f-skey')), key: keyNow || conv.key || (st.mode === 'degree' ? '' : detectKey(conv.body)), bpm: parseInt(v('#f-bpm')) || '', capo: parseInt(v('#f-capo')) || conv.capo || 0, bpb: +$('#f-bpb').value || 4, body: conv.body, ...(st.draft && st.draft.source ? { source: st.draft.source } : {}) };
     const guessed = !keyNow && !conv.key && !!fields.key;
     fields.keyGuess = guessed;
     const autoShift = fields.singerKey ? keyInterval(fields.key, fields.singerKey) : 0;
@@ -1434,9 +1521,24 @@ const actions = {
     nav = [{ type:'songs' }, { type:'song', id: s.id }]; tab = 'songs';
     toast('Música salva'); render();
   },
+  helper(){ go({ type:'helper' }); },
+  'bm-hint'(){ toast('Arraste este botão para a barra de favoritos'); },
+  'copy-code'(el){
+    const txt = el.dataset.v === 'bm' ? BOOKMARKLET : SHORTCUT_JS;
+    const fallback = () => { const o = $('#code-out'); o.hidden = false; o.value = txt; o.focus(); o.select(); toast('Selecione e copie o código abaixo'); };
+    try { navigator.clipboard.writeText(txt).then(() => toast('Código copiado'), fallback); } catch(e){ fallback(); }
+  },
+  async 'clip-import'(){
+    let txt = '';
+    try { txt = await navigator.clipboard.readText(); } catch(e){}
+    if (txt && (isPayload(txt) || cleanText(txt).split('\n').some(l => isChordLine(l.replace(/^\[[^\]]+\]\s*/, ''))))){ openImport(parsePayload(txt)); return; }
+    go({ type:'find' });
+    toast(txt ? 'O que está copiado não parece uma cifra. Use o botão do Cifra Club ou cole abaixo.' : 'Toque e segure no campo “Cole a cifra aqui” e escolha Colar');
+  },
   'paste-convert'(){
     const txt = $('#paste').value;
     if (!txt.trim()){ toast('Cole a cifra primeiro'); return; }
+    if (isPayload(txt)){ openImport(parsePayload(txt)); return; }
     const r = convertPasted(txt);
     const q = ui.find.q.split(',');
     const key = normKey(r.key) || detectKey(r.body);
@@ -1516,6 +1618,7 @@ document.addEventListener('click', e => {
   }
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
+  if (el.tagName === 'A') e.preventDefault();
   const fn = actions[el.dataset.act]; if (fn) fn(el);
 });
 /* Editor: converte para graus sozinho (ao colar ou ao sair do campo) */
@@ -1657,6 +1760,8 @@ setInterval(() => { if (document.visibilityState === 'visible') queueSync(0); },
 takeSnap();
 fixKeys();
 render();
+importFromHash();
+window.addEventListener('hashchange', importFromHash);
 queueSync(500);
 </script>
 
@@ -1665,7 +1770,7 @@ queueSync(500);
 <script>
 /* Funciona sem internet: o service worker guarda o app no aparelho na primeira visita.
    Atualização: ao abrir e sempre que o app volta para a tela, procura versão nova no GitHub e aplica. */
-const APP_VERSION = '16';
+const APP_VERSION = '17';
 (function(){
   if (!('serviceWorker' in navigator)) return;
   let reloading = false, lastCheck = 0;

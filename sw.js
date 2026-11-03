@@ -1,5 +1,5 @@
 /* Cifra de Palco — guarda o app no aparelho para abrir sem internet */
-const VERSION = 'cifra-palco-v16';
+const VERSION = 'cifra-palco-v17';
 const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
